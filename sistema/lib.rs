@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std, no_main)] 
 pub use self::sistema::SistemaRef;
 
+//entregable v2
 #[ink::contract]
 mod sistema {
     use ink::prelude::vec::Vec;
@@ -179,8 +180,6 @@ mod sistema {
             momento >= self.fecha_fin
         }
 
-
-
         pub fn es_votante(&self, acc_id:AccountId)->bool{
             return self.votantes.iter().any(|u| *u == acc_id)
         }
@@ -205,10 +204,56 @@ mod sistema {
         pub fn sumar_voto(&mut self,pos:usize){
             self.votos.entry(self.candidatos[pos]).and_modify(|c|* c = c.wrapping_add(1));
         }
-    }
 
+        pub fn get_reporte(&self , users:Vec<Usuario>){ //recibe un vec de usuarios porque como no tenemos los datos de cada usuario sino que tenemos su acc id , de algun lado necesitamos agarrar sus datos personales
+             
+            let total = self.reporte1();
+            if total != 0 && self.candidatos.len() > 0  { 
+                ink::env::debug_println!("EL TOTAL DE USUARIOS REGISTRADOS Y APROBADOS PARA ESTA VOTACION SON: {}",total);
+                let porcentaje = self.reporte2(total);
+                if porcentaje != 0.0{
+                    ink::env::debug_println!("EL PORCENTAJE DE USUARIOS QUE VOTARON ES:%{}",porcentaje);
+                    let ordenado = self.reporte3();
+                    for (i,o) in ordenado.iter().enumerate(){
+                        let usuario = users.iter().find(| u | u.acc_id == o.0).unwrap(); // podemos hacer unwrap porque sabemos que el usuario existe 
+                        ink::env::debug_println!("{}º - {} {}",i.wrapping_add(1) , usuario.nombre , usuario.apellido );
+                    }
+                }else{
+                    panic!("NO HUBIERON VOTOS");
+                }
+            }else{
+                panic!("NO HUBO USUARIOS/CANDIDATOS ACEPTADOS PARA VOTAR");
+            }
+
+        }
+
+        fn reporte1(&self) ->usize{
+            self.votantes.len()
+        }
+
+        fn reporte2(&self, total:usize) ->f64{
+            let mut cantvotos: u32=0;
+            for v in &self.votos{
+                cantvotos = cantvotos.wrapping_add(*v.1);
+            };
+            if cantvotos !=0 {
+                (cantvotos as f64 / total as f64 ) * 100.0
+            }
+            else{
+                 0.0
+            }
+        }
+
+        fn reporte3(&self) -> Vec<(AccountId,u32)>{
+            let aux = self.votos.clone();
+            let mut vec: Vec<(AccountId, u32)> = aux.into_iter().collect(); // creamos un vector para ordenar de mayor a menor cada candidato 
+            vec.sort_by(|a, b| b.1.cmp(&a.1));
+            vec
+        }
 
     
+    }
+
     #[ink(storage)]
     pub struct Sistema {
         nombre_administrador:String,
@@ -220,9 +265,7 @@ mod sistema {
         admin:AccountId,
     }
     
-
-    impl Sistema {
-        
+        impl Sistema {
         //Constructor que recibe unicamente el nombre del administrador
         #[ink(constructor)]
         pub fn new(nombre_administrador: String) -> Self {
@@ -268,7 +311,7 @@ mod sistema {
             let mut aux: Option<String> = None;
             if caller == self.admin {  // solo el administrador puede validar candidatos 
                 if !self.espera_usuarios.is_empty() {  // checkea si hay candidatos a validar, y si hay se empieza a trabajar el primero
-                    let us = self.espera_usuarios[0].clone();
+                    let mut us = self.espera_usuarios[0].clone();
                     let mut s1 = us.nombre.clone();
                     let s2 = String::from(" ");
                     let s3 = us.apellido.clone();
@@ -276,6 +319,7 @@ mod sistema {
                     s1.push_str(&s3);
                     aux = Some(s1);   
                     if aceptar{  // el admin decide si aceptar o rechazar el candidato
+                        us.verificado=true;
                         self.usuarios_reg.push(us)
                     }
                     self.espera_usuarios.remove(0);  // se elimina de la cola de espera de aprobacion 
@@ -516,6 +560,10 @@ mod sistema {
                 return Some(vot.clone());
             }
             None
+        }
+        #[ink(message)]
+        pub fn get_usuarios(&self) -> Vec<Usuario>{
+            self.usuarios_reg.clone()
         }
 
     }
@@ -1290,5 +1338,156 @@ mod sistema {
 
     }
 
+    #[ink::test]
+    #[should_panic(expected = "NO HUBO USUARIOS/CANDIDATOS ACEPTADOS PARA VOTAR")]
+    fn test_get_reporte_sin_usuarios() {
+
+        let accounts = default_accounts();
+        test::set_caller::<ink::env::DefaultEnvironment>(accounts.alice);
+
+        let mut contract = Sistema::new(String::from("admin"));          
+        contract.crear_votacion_impl(1, "Presidente".to_string(),Fecha::new(5, 7, 2024), Fecha::new(1, 1, 2025),accounts.alice);
+        
+        if let Some(v) = contract.get_votacion(1){
+            v.get_reporte(vec![]);
+        }
+    }
+
+   #[ink::test]
+    #[should_panic(expected = "NO HUBO USUARIOS/CANDIDATOS ACEPTADOS PARA VOTAR")]
+    fn test_get_reporte_sin_candidatos_aceptados() {
+       
+        let accounts = default_accounts();
+        test::set_caller::<ink::env::DefaultEnvironment>(accounts.alice);
+
+        let mut contract = Sistema::new(String::from("admin"));          
+        contract.crear_votacion_impl(1, "Presidente".to_string(),Fecha::new(5, 7, 2024), Fecha::new(1, 1, 2025),accounts.alice);
+            
+        let user1 = Usuario::new("agus".to_string(), "agus".to_string(), 1111, 20, true, Some(Rol::Votante), accounts.bob);
+        contract.usuarios_reg.push(user1.clone());
+        contract.get_votacion(1).unwrap().votantes.push(user1.acc_id);
+
+        contract.get_votacion(1).unwrap().get_reporte(vec![user1]);
+    }
+
+    
+#[ink::test]
+    #[should_panic(expected = "NO HUBIERON VOTOS")]
+    fn test_get_reporte_sin_votos() {
+        let accounts = default_accounts();
+        test::set_caller::<ink::env::DefaultEnvironment>(accounts.alice);
+
+        let mut contract = Sistema::new(String::from("admin"));          
+        contract.crear_votacion_impl(1, "Presidente".to_string(),Fecha::new(5, 7, 2024), Fecha::new(1, 1, 2025),accounts.alice);
+            
+        let user1 = Usuario::new("agus".to_string(), "agus".to_string(), 1111, 20, true, Some(Rol::Votante), accounts.bob);
+        let user2 = Usuario::new("agus".to_string(), "agus".to_string(), 2222, 20, true, Some(Rol::Candidato), accounts.django);
+
+        contract.usuarios_reg.push(user1.clone());
+        contract.usuarios_reg.push(user2.clone());
+
+        contract.votaciones[0].votantes.push(user1.acc_id);
+        contract.votaciones[0].candidatos.push(user2.acc_id);
+
+        contract.get_votacion(1).unwrap().get_reporte(vec![user1,user2]);
+    }
+#[ink::test]
+    fn test_get_reporte_algunos_votos() {
+        let accounts = default_accounts();
+        test::set_caller::<ink::env::DefaultEnvironment>(accounts.alice);
+
+        let mut contract = Sistema::new(String::from("admin"));          
+        contract.crear_votacion_impl(1, "Presidente".to_string(),Fecha::new(5, 7, 2024), Fecha::new(1, 1, 2025),accounts.alice);
+            
+        let user1 = Usuario::new("agus".to_string(), "agus".to_string(), 1111, 20, true, Some(Rol::Votante), accounts.bob);
+        let user2 = Usuario::new("agus".to_string(), "agus".to_string(), 2222, 20, true, Some(Rol::Votante), accounts.django);
+
+        let user3 = Usuario::new("agus".to_string(), "agus".to_string(), 333, 20, true, Some(Rol::Candidato), accounts.charlie);
+        let user4 = Usuario::new("agus".to_string(), "agus".to_string(), 444, 20, true, Some(Rol::Candidato), accounts.frank);
+
+        contract.usuarios_reg.push(user1.clone());
+        contract.usuarios_reg.push(user2.clone());
+        contract.usuarios_reg.push(user3.clone());
+        contract.usuarios_reg.push(user4.clone());
+        contract.votaciones[0].sumar_votante(user1.acc_id);
+        contract.votaciones[0].sumar_votante(user2.acc_id);
+        contract.votaciones[0].sumar_candidato(user3.acc_id);
+        contract.votaciones[0].sumar_candidato(user4.acc_id);
+        // Agregar votos
+        contract.votaciones[0].sumar_voto(0);
+        contract.votaciones[0].get_reporte(contract.get_usuarios());
+
+        // Verificaciones
+        assert_eq!(contract.votaciones[0].reporte1(), 2);
+        assert_eq!(contract.votaciones[0].reporte2(2), 50.0);
+        assert_eq!(contract.votaciones[0].reporte3(), vec![(user3.acc_id, 1), (user4.acc_id,0)]);
+    }
+#[ink::test]
+    fn test_get_reporte_todos_votaron() {
+        let accounts = default_accounts();
+        test::set_caller::<ink::env::DefaultEnvironment>(accounts.alice);
+
+        let mut contract = Sistema::new(String::from("admin"));          
+        contract.crear_votacion_impl(1, "Presidente".to_string(),Fecha::new(5, 7, 2024), Fecha::new(1, 1, 2025),accounts.alice);
+            
+        let user1 = Usuario::new("agus".to_string(), "agus".to_string(), 1111, 20, true, Some(Rol::Votante), accounts.bob);
+        let user2 = Usuario::new("agus".to_string(), "agus".to_string(), 2222, 20, true, Some(Rol::Votante), accounts.django);
+
+        let user3 = Usuario::new("agus".to_string(), "agus".to_string(), 333, 20, true, Some(Rol::Candidato), accounts.charlie);
+        let user4 = Usuario::new("agus".to_string(), "agus".to_string(), 444, 20, true, Some(Rol::Candidato), accounts.frank);
+
+        contract.usuarios_reg.push(user1.clone());
+        contract.usuarios_reg.push(user2.clone());
+        contract.usuarios_reg.push(user3.clone());
+        contract.usuarios_reg.push(user4.clone());
+        contract.votaciones[0].sumar_votante(user1.acc_id);
+        contract.votaciones[0].sumar_votante(user2.acc_id);
+        contract.votaciones[0].sumar_candidato(user3.acc_id);
+        contract.votaciones[0].sumar_candidato(user4.acc_id);
+        // Agregar votos
+        contract.votaciones[0].sumar_voto(0);
+        contract.votaciones[0].sumar_voto(0);
+
+        contract.votaciones[0].get_reporte(contract.get_usuarios());
+
+        // Verificaciones
+        assert_eq!(contract.votaciones[0].reporte1(), 2);
+        assert_eq!(contract.votaciones[0].reporte2(2), 100.0);
+        assert_eq!(contract.votaciones[0].reporte3(), vec![(user3.acc_id, 2), (user4.acc_id,0)]);
+    }
+        
+    #[ink::test]
+    fn test_es_fecha_valida() {
+        let fecha_valida = Fecha::new(10, 5, 2024);
+        assert!(fecha_valida.es_fecha_valida());
+
+        let fecha_invalida = Fecha::new(30, 2, 2021);
+        assert!(!fecha_invalida.es_fecha_valida());
+    }
+
+    #[ink::test]
+    fn test_es_bisiesto() {
+        let fecha_bisiesta = Fecha::new(1, 1, 2020);
+        assert!(fecha_bisiesta.is_leap_year(fecha_bisiesta.anio));
+
+        let fecha_no_bisiesta = Fecha::new(1, 1, 2021);
+        assert!(!fecha_no_bisiesta.is_leap_year(fecha_no_bisiesta.anio));
+    }
+
+#[ink::test]
+    fn test_es_mayor() {
+        let fecha1 = Fecha::new(10, 5, 2024);
+        let fecha2 = Fecha::new(10, 5, 2023);
+        assert!(fecha1.es_mayor(&fecha2));
+
+        let fecha3 = Fecha::new(10, 5, 2024);
+        let fecha4 = Fecha::new(10, 4, 2024);
+        assert!(fecha3.es_mayor(&fecha4));
+
+        let fecha5 = Fecha::new(10, 5, 2024);
+        let fecha6 = Fecha::new(9, 5, 2024);
+        assert!(fecha5.es_mayor(&fecha6));
+    }
 }
+
 }
