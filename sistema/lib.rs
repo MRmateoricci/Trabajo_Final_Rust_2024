@@ -272,6 +272,14 @@ mod sistema {
             Self { nombre_administrador,espera_usuarios:Vec::new(),espera_candidatos:Vec::new(),espera_votantes:Vec::new(), usuarios_reg:Vec::new(),votaciones: Vec::new(), admin: Self::env().caller() }
         }
 
+        #[ink(message)]
+        pub fn delegar_admin(& mut self , id:AccountId){
+            if self.env().caller() == self.admin {
+                self.admin = id;
+            }else{
+                panic!("SOLO EL ADMINISTRADOR PUEDE DELEGAR EL ADMIN");
+            }
+        }
 
         //Crea un usuario verificando que no sea el administrador y que no este repetido y lo agrega a la lista de espera de aprobacion del administrador
         #[ink(message)]
